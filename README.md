@@ -139,6 +139,114 @@ You are free to use any language or runtime. Python, JavaScript, and TypeScript 
 
 ---
 
+## Setup
+
+### Prerequisites
+
+- Python 3.10+ (or your language of choice)
+- An OpenRouter API key (get one at [openrouter.ai/keys](https://openrouter.ai/keys))
+- Docker (optional, for full stack with Redis + Postgres/pgvector)
+
+### Quick Setup
+
+```bash
+# Install Python dependencies
+pip install -U -r code/requirements.txt
+
+# Configure your API key
+cp code/.env.example code/.env
+# Edit code/.env and add: OPENROUTER_API_KEY=sk-or-v1-...
+
+# Or export directly
+export OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+### Optional Infrastructure (Redis cache + pgvector dedup)
+
+For shared caching and cross-user image deduplication:
+
+```bash
+# Install infrastructure dependencies
+pip install -U -r code/requirements-infra.txt
+
+# Or use Docker to run the full stack (no local Python setup needed)
+echo "OPENROUTER_API_KEY=sk-or-v1-..." >> .env
+docker compose run --rm app
+```
+
+### Run the Solution
+
+```bash
+# Generate final predictions: dataset/claims.csv → output.csv
+python code/main.py
+
+# Quick test on a few rows
+python code/main.py --limit 3
+
+# Run evaluation on sample data
+python code/evaluation/main.py
+
+# Run deterministic tests (no API key needed)
+python code/tests/test_rules.py && python code/tests/test_router.py
+```
+
+---
+
+## Approach Overview
+
+The implemented solution uses a **three-stage pipeline** that balances cost, accuracy, and defensibility:
+
+### Stage 1: Claim Extraction (Text-only, Haiku 4.5)
+
+- Normalizes multilingual chat transcripts (Hindi/Hinglish, Spanish, Chinese) to canonical English claim intent
+- Extracts claimed object parts and issue types
+- Flags instruction/manipulation text in the conversation as untrusted data
+
+### Stage 2: Visual Verification (Single-routed Vision Model)
+
+- **Images are the source of truth** for all visual judgments
+- Structured output: `issue_type`, `object_part`, `claim_status`, `evidence_standard_met`, `valid_image`, `severity`, `supporting_image_ids`, visual risk flags
+- **Single-route model selection** (cost-first default):
+  - **Sonnet 4.6** on every claim (~$0.91 for 44 test rows)
+  - Optional router can escalate hard cases to **Opus 4.8** before any vision call
+  - Accuracy-first mode: `--mode forced --model anthropic/claude-opus-4.8` (~$1.56)
+- No double-pay: every claim pays for exactly one Stage-2 call
+
+### Stage 3: Deterministic Rule Layer (No API calls)
+
+- **100% reproducible** business logic implemented in Python
+- Enforces field consistency (`evidence_standard_met=false ⟺ claim_status=not_enough_information`)
+- Derives `user_history_risk` and `manual_review_required` flags mechanically
+- User history context never overrides clear visual evidence
+- Validated against all 20 labeled samples with no API key (`code/tests/test_rules.py`)
+
+### Adversarial Handling
+
+- **Prompt injection** (in chat or image): flagged `text_instruction_present`, treated as untrusted, never moves verdict
+- **Non-original images** (watermarks, stock photos): flagged `non_original_image` → `valid_image=false`
+- **Exaggeration**: `severity` reflects actual visible damage, not claimed magnitude
+- **Cross-user image reuse** (optional, pgvector): images used by multiple users flagged for fraud detection
+
+### Key Design Decisions
+
+See [`docs/adr/`](./docs/adr/) for detailed rationale:
+
+- **[ADR-0001](./docs/adr/0001-two-stage-pipeline-with-rule-layer.md)**: Two-stage model pipeline + deterministic rule layer
+- **[ADR-0002](./docs/adr/0002-openrouter-provider.md)**: OpenRouter as provider (OpenAI-compatible API, model-agnostic)
+- **[ADR-0003](./docs/adr/0003-single-route-stage2.md)**: Single-route Stage-2 (no confidence-escalation double-pay)
+- **[ADR-0004](./docs/adr/0004-pgvector-image-dedup.md)**: pgvector for reused-image detection across users
+
+### Cost & Reproducibility
+
+- **44-row test set cost**: ~$0.91 (Sonnet-all, shipped default) | ~$1.09 (router armed) | ~$1.56 (Opus-all)
+- Structured outputs pin every field to allowed enums
+- System prompt + evidence requirements are prompt-cached
+- Images downscaled to 1568px max dimension
+- Responses cached by input hash (filesystem or Redis)
+- Full operational analysis in [`code/evaluation/evaluation_report.md`](./code/evaluation/evaluation_report.md)
+
+---
+
 ## Evaluation
 
 The evaluation report should include:
