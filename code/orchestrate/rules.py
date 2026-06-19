@@ -1,10 +1,39 @@
-"""Stage 3 — the deterministic rule layer.
+"""Stage 3 — Deterministic Rule Layer (pure Python, no API calls).
 
-Owns every decision that should not depend on a model: the evidence/status
-invariant, severity anchoring, the user-history flags, the manual-review rule,
-and enum/format normalization. Every rule here is validated against 100% of the
-labeled samples (see code/tests/test_rules.py) and is pure Python — runnable
-without an API key.
+The rule layer enforces invariants that models should not decide, consolidates flags
+from all sources, and normalizes the final output. Every rule is validated against
+100% of the 20 labeled samples (code/tests/test_rules.py) and runs with no API key.
+
+Responsibilities:
+
+1. **Evidence → Status coupling**: If the evidence standard isn't met, the claim
+   status must be not_enough_information and severity must be unknown. This is a
+   logical invariant, not a model judgment.
+
+2. **Severity anchoring**: If issue_type=none (no visible damage), severity must be
+   none. If evidence_standard_met=false, severity must be unknown.
+
+3. **Image validity**: If non_original_image flag is present (watermark, stock photo,
+   reused across users), valid_image must be false.
+
+4. **Flag consolidation**: Merge flags from four sources —
+   - Visual flags from Stage 2 (claim_mismatch, possible_manipulation, ...)
+   - Chat flags from Stage 1 (text_instruction_present if instruction text detected)
+   - Pgvector flags (non_original_image from reused-image detector, ADR-0004)
+   - History flags from user_history.csv (user_history_risk)
+   Then deduplicate and order canonically per RISK_FLAG_ORDER.
+
+5. **Manual review trigger**: Set manual_review_required if user_history_risk OR any
+   substantive evidence flag is present. Image-quality-only flags (low_quality_image)
+   and a bare not_enough_information do not trigger manual review (ADR-0001).
+
+6. **Enum normalization**: Validate all fields against allowed_values.py, convert
+   bools to "true"/"false" strings, format supporting_image_ids and risk_flags as
+   semicolon-separated or "none".
+
+The rule layer is the final gatekeeper before output.csv: it ensures every row
+conforms to the output schema and logical constraints, even if the model outputs are
+inconsistent or incomplete.
 """
 
 from __future__ import annotations
@@ -57,13 +86,35 @@ def finalize(
     image_ids: list[str],
     extra_visual_flags: set[str] | None = None,
 ) -> dict:
-    """Combine the two model stages + history into the 10 predicted output fields.
+    """Combine Stage 1 + Stage 2 + history + extra flags → 10 predicted output fields.
 
-    ``extra_visual_flags`` carries deterministic, non-model evidence flags
-    discovered outside Stage 2 — e.g. ``non_original_image`` from the pgvector
-    reused-image detector (ADR-0004). Only recognized visual flags are honored,
-    and they flow through the same invariants as model-emitted flags (so
-    ``non_original_image`` still forces ``valid_image=false`` and manual review).
+    This is the rule layer's main entry point. It takes the raw model outputs and
+    enforces all logical invariants, consolidates flags from all sources (visual,
+    chat, pgvector, history), and normalizes enums/formats for output.csv.
+
+    Args:
+        stage1: Claim extraction output (claimed_parts, instruction_text_in_chat, ...)
+        stage2: Visual verification output (claim_status, evidence_standard_met,
+                risk_flags, severity, supporting_image_ids, ...)
+        history_flags: Semicolon-separated flags from user_history.csv ("none" or
+                       "user_history_risk;manual_review_required")
+        image_ids: Available image IDs for this claim (e.g., ["img_001", "img_002"])
+        extra_visual_flags: Optional deterministic flags from external detectors (e.g.
+                            "non_original_image" from pgvector reused-image detection,
+                            ADR-0004). Only recognized visual flags are honored.
+
+    Returns:
+        Dict with 10 output fields: evidence_standard_met,
+        evidence_standard_met_reason, risk_flags, issue_type, object_part,
+        claim_status, claim_status_justification, supporting_image_ids,
+        valid_image, severity.
+
+    Invariants enforced:
+        - evidence_standard_met=false ⟹ claim_status=not_enough_information
+        - evidence_standard_met=false ⟹ severity=unknown
+        - issue_type=none ⟹ severity=none
+        - non_original_image ⟹ valid_image=false
+        - user_history_risk OR substantive flags ⟹ manual_review_required
     """
     # --- assemble base (visual + chat-injection) flags ---
     base = set(stage2.get("risk_flags", [])) & set(VISUAL_RISK_FLAGS)

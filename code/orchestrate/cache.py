@@ -1,18 +1,26 @@
-"""Response cache keyed by a hash of the full request.
+"""Response cache keyed by SHA-256 hash of the full request.
 
-Makes re-runs free and reproducible: identical inputs (model, prompt, schema,
-image bytes) always return the same stored response, so iterating on the rule
-layer or eval never re-pays for model calls.
+Makes re-runs free and reproducible: identical inputs (model, prompt, schema, image
+bytes, max_tokens) always return the same cached response with zero API calls. This
+means iterating on the rule layer, regenerating output.csv, or re-running evaluation
+never re-pays for model calls — only the first run per unique input hits the API.
 
-Pluggable backend so the cache scales past one machine:
-- **filesystem** (default): on-disk JSON under ``.cache/responses`` — zero setup.
-- **Redis** (when ``REDIS_URL`` is set): a shared cache across every worker /
-  container / machine, which is what you want once the CSV is big and the run is
-  fanned out. Falls back to filesystem if Redis can't be reached, so a run never
-  fails just because the cache is down.
+Pluggable backend architecture for scale:
 
-The public API (``cache_key`` / ``get`` / ``put``) is unchanged; callers don't
-know or care which backend is active.
+- **Filesystem** (default): On-disk JSON under ``.cache/responses/`` — zero setup,
+  works immediately, per-machine. Each key is a separate file (SHA-256.json).
+
+- **Redis** (when REDIS_URL env var is set): Shared cache across workers, containers,
+  and machines. Essential for distributed runs on large datasets (1000s of claims).
+  Falls back to filesystem if Redis is unreachable, so a run never hard-fails just
+  because the cache service is down.
+
+The public API (cache_key, get, put) is backend-agnostic: callers hash the request
+payload and get/put responses without knowing which backend is active. The backend
+is chosen once at module load time based on environment.
+
+Cache key includes: stage, model, prompt, schema version, user content (incl. image
+hashes), max_tokens, effort, thinking. Changing any input invalidates the cache.
 """
 
 from __future__ import annotations

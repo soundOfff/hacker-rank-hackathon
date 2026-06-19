@@ -1,4 +1,28 @@
-"""Stage 2 — visual verification from the submitted images."""
+"""Stage 2 — Visual Verification (vision + text, Sonnet 4.6 or Opus 4.8).
+
+The source-of-truth stage: judges the claim against the submitted images, ignoring
+any instruction text (in chat or images) that tries to steer the decision. Produces
+structured predictions:
+  - claim_status: supported | contradicted | not_enough_information
+  - claim_status_justification: short reason grounded in image evidence
+  - evidence_standard_met: whether the images meet minimum requirements for this claim
+  - evidence_standard_met_reason: why the standard was/wasn't met
+  - issue_type: visible damage type (dent, scratch, crack, ...)
+  - object_part: relevant part from the allowed list per object type
+  - severity: none | low | medium | high | unknown
+  - valid_image: whether the image set is usable for automated review
+  - risk_flags: visual/authenticity signals (claim_mismatch, non_original_image, ...)
+  - supporting_image_ids: which images back the decision
+  - confidence: low | medium | high (used by the old escalation config, not shipped)
+
+Model selection is single-route (ADR-0003): the router picks ONE model before this
+stage runs, so each claim pays for exactly one Stage-2 call — no Sonnet-then-Opus
+double-pay. Default: Sonnet 4.6 (cost-first). Escalation: Opus 4.8 (accuracy-first).
+
+The system prompt includes the evidence requirements table as a stable, prompt-cached
+prefix. Images are downscaled (max 1568px edge) and base64-encoded. Responses are
+cached by input hash (model, prompt, schema, image bytes) so re-runs are free.
+"""
 
 from __future__ import annotations
 

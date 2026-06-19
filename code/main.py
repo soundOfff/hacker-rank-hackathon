@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
-"""Entry point — run the claim-verification pipeline on dataset/claims.csv and
-write output.csv.
+"""Entry point — run the three-stage claim-verification pipeline on dataset/claims.csv
+and write output.csv.
+
+The pipeline: Stage 1 (claim extraction) → Router → Stage 2 (visual verification) →
+Rule Layer (deterministic invariants) → structured CSV output.
+
+Cost-first default: Sonnet 4.6 on every claim (~$0.91/44 claims, 70% accuracy).
+Accuracy-first option: Opus 4.8 on every claim (~$1.56/44 claims, 80% accuracy).
 
 Examples:
-    python code/main.py                          # routed config -> ./output.csv
+    python code/main.py                          # cost-first (routed) -> ./output.csv
     python code/main.py --limit 3                # smoke test on 3 rows
-    python code/main.py --mode forced --model anthropic/claude-sonnet-4.6
-    python code/main.py --output dataset/output.csv
+    python code/main.py --mode forced --model anthropic/claude-opus-4.8  # accuracy-first
+    python code/main.py --output dataset/output.csv  # custom output path
+    python code/main.py --no-cache               # bypass response cache (force API calls)
+
+The system auto-detects optional services via environment variables:
+  - REDIS_URL → shared response cache (default: filesystem)
+  - DATABASE_URL → pgvector reused-image detection (default: disabled)
 """
 
 from __future__ import annotations

@@ -1,14 +1,25 @@
-"""Single-route Stage-2 model selection (ADR-0003).
+"""Single-route Stage-2 Model Selection (ADR-0003).
 
-Picks exactly ONE Stage-2 model per claim *before* any vision call, from cheap
-pre-Stage-2 signals (the Stage-1 extraction + the user's history). The pricier
-escalation model is reserved for the hard/adversarial minority; everything else
-runs the default model.
+Picks exactly ONE Stage-2 model per claim *before* any vision call, using cheap
+pre-Stage-2 signals (Stage-1 extraction + user history). No double-pay: each claim
+pays for one Stage-2 call, not Sonnet-then-Opus.
 
-This replaces the old confidence-escalation path, which always ran the default
-model and *then* re-ran the escalation model on top — paying for two Stage-2
-calls on every escalated row. The routing signals here are all known *before*
-Stage 2, so each claim pays for exactly one Stage-2 call.
+Routing strategy (cost-first, shipped):
+  - Default model (Sonnet 4.6): Easy majority of claims
+  - Escalation model (Opus 4.8): Hard/adversarial minority
+
+Escalation triggers (all configurable via ORCH_ROUTE_ON_* env vars):
+  1. instruction_text_in_chat=true (adversarial prompt injection detected in Stage 1)
+  2. is_multi_part=true (claim spans multiple parts → harder to assess)
+  3. user_history_risk=true (risky history from user_history.csv)
+
+Shipped default: All triggers OFF → Sonnet on every claim (~$0.91/44, 70% acc).
+Accuracy-first: Force Opus on every claim (~$1.56/44, 80% acc) via --mode forced.
+
+This replaces the old confidence-escalation config, which always ran Sonnet first,
+then re-ran Opus on low-confidence rows — paying for two Stage-2 calls per escalated
+claim (~$2.09/44). The routing signals here are all known *before* Stage 2, so we
+pick the right model once and stop.
 """
 
 from __future__ import annotations

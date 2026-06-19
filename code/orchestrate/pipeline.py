@@ -1,12 +1,32 @@
-"""Per-claim orchestration: Stage 1 -> Stage 2 (single-routed) -> rule layer.
+"""Per-claim orchestration: Stage 1 → Router → Stage 2 → Rule Layer → Output.
+
+The three-stage pipeline processes each claim independently:
+
+1. **Stage 1 (Claim Extraction)**: Normalizes the multilingual chat transcript to
+   a canonical claim intent (claimed parts/issues, summary, adversarial signals).
+   Model: Haiku 4.5, text-only, no reasoning budget needed.
+
+2. **Router (Single-route selection)**: Picks exactly ONE Stage-2 model before any
+   vision call, from cheap pre-Stage-2 signals (Stage-1 output + user history).
+   No double-pay: each claim pays for one Stage-2 call, not Sonnet-then-Opus.
+
+3. **Stage 2 (Visual Verification)**: Runs the routed model once against images +
+   claim intent to produce structured predictions (status, evidence, severity, flags).
+   Models: Sonnet 4.6 (cost-first default) or Opus 4.8 (accuracy-first or escalated).
+
+4. **Rule Layer (Deterministic)**: Enforces evidence/status invariants, consolidates
+   flags (chat + visual + pgvector + history), triggers manual review, normalizes enums.
+   Pure Python, no API calls, 100% tested on labeled samples.
 
 Modes:
-- "routed" (shipped): a cheap up-front router (router.py) picks ONE Stage-2 model
-            per claim — the default model for the easy majority, the escalation
-            model for hard/adversarial rows — so each claim pays for exactly one
-            Stage-2 call. ("tiered" is accepted as a back-compat alias.)
-- "forced": Stage 2 = a single fixed model, no routing (used to compare
-            Sonnet-all vs Opus-all in evaluation).
+- "routed" (shipped): Router picks the model per claim based on escalation signals
+  (instruction text, multi-part, history risk). Cost-first default: Sonnet on easy
+  claims, Opus on hard ones. ("tiered" is a back-compat alias.)
+- "forced": Stage-2 uses a single fixed model for all claims, no routing. Used to
+  compare Sonnet-all vs Opus-all in evaluation.
+
+Optional: pgvector deduplication pre-pass (when DATABASE_URL set) flags reused images
+across users before Stage 2. See ADR-0004.
 """
 
 from __future__ import annotations
