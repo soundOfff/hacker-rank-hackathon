@@ -61,7 +61,7 @@ Read [`problem_statement.md`](./problem_statement.md) for the full task spec, in
 ## Solution Architecture
 
 The implemented solution uses a **three-stage pipeline** with single-route model selection for cost efficiency:
-<img width="5885" height="8192" alt="solve" src="https://github.com/user-attachments/assets/5bfe7e03-faee-48b8-9272-a5fd904b5362" />
+<img width="5885" height="8192" alt="Claims Evidence-2026-06-19-193121" src="https://github.com/user-attachments/assets/bbd78788-28a5-4410-bf16-67ce03716fc5" />
 
 
 ### Key Design Decisions
