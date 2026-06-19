@@ -13,3 +13,7 @@ venv/
 
 # Eval artifacts that are regenerated on each run
 code/evaluation/preds_*.csv
+
+# Submission bundle — regenerable via `git archive`, uploaded to HackerRank
+code.zip
+chat_transcript.md
