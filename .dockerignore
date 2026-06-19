@@ -1,0 +1,13 @@
+# Build context hygiene — keep the image small and secrets out of it.
+.git
+.gitignore
+.venv
+.cache
+**/__pycache__
+*.pyc
+*.pyo
+.env
+code/.env
+code/evaluation/preds_*.csv
+node_modules
+docs

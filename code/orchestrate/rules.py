@@ -55,12 +55,22 @@ def finalize(
     stage2: dict,
     history_flags: str | None,
     image_ids: list[str],
+    extra_visual_flags: set[str] | None = None,
 ) -> dict:
-    """Combine the two model stages + history into the 10 predicted output fields."""
+    """Combine the two model stages + history into the 10 predicted output fields.
+
+    ``extra_visual_flags`` carries deterministic, non-model evidence flags
+    discovered outside Stage 2 — e.g. ``non_original_image`` from the pgvector
+    reused-image detector (ADR-0004). Only recognized visual flags are honored,
+    and they flow through the same invariants as model-emitted flags (so
+    ``non_original_image`` still forces ``valid_image=false`` and manual review).
+    """
     # --- assemble base (visual + chat-injection) flags ---
     base = set(stage2.get("risk_flags", [])) & set(VISUAL_RISK_FLAGS)
     if stage1.get("instruction_text_in_chat"):
         base.add("text_instruction_present")
+    if extra_visual_flags:
+        base |= (set(extra_visual_flags) & set(VISUAL_RISK_FLAGS))
 
     issue = stage2["issue_type"]
     part = stage2["object_part"]

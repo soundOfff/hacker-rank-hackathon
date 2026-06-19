@@ -1,0 +1,16 @@
+# Optional infrastructure dependencies (Items 3 & 4 — shared cache + vector store).
+#
+# NOT required to run `python code/main.py`: with no REDIS_URL the cache is the
+# local filesystem, and with no DATABASE_URL the vector store is simply skipped.
+# These are installed in the Docker image so `docker compose up` brings the full
+# stack (Redis + Postgres/pgvector) online with one command.
+
+redis>=5.0.0            # shared response cache backend (orchestrate/cache.py)
+psycopg[binary]>=3.1.0  # Postgres client for the pgvector store (bundles libpq)
+pgvector>=0.3.0         # pgvector helpers (vector type adapter)
+
+# Optional: semantic CLIP embeddings for the vector store. Heavy (pulls torch),
+# so it is left out of the default image. The default embedding backend is a
+# dependency-light perceptual hash (Pillow only) — the right signal for
+# reused/near-duplicate images. Enable CLIP with ORCH_EMBED_BACKEND=clip.
+# sentence-transformers>=3.0.0

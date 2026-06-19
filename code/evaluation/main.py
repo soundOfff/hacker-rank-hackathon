@@ -2,8 +2,9 @@
 """Evaluation entry point.
 
 Runs the pipeline on dataset/sample_claims.csv under three configurations —
-Sonnet-all, Opus-all (the head-to-head comparison), and the shipped Tiered
-config — scores each against the labeled outputs, and writes
+Sonnet-all, Opus-all (the head-to-head comparison), and the shipped routed
+config (cost-first: Sonnet on every claim) — scores each against the labeled
+outputs, and writes
 code/evaluation/evaluation_report.md (metrics + operational analysis).
 
     python code/evaluation/main.py
@@ -76,7 +77,7 @@ def build_report(claims, golds, runs: dict, n_images: int) -> str:
       "`risk_flags` / `supporting_image_ids` by set F1; free-text justifications spot-checked.\n")
 
     # ---- 2. Accuracy comparison ----
-    A("## 2. Accuracy — Sonnet-all vs Opus-all vs Tiered\n")
+    A("## 2. Accuracy — Sonnet-all vs Opus-all vs Routed\n")
     A("| Metric | " + " | ".join(runs[c]["name"] for c in runs) + " |")
     A("|---|" + "---|" * len(runs))
     def row(label, getter):
@@ -106,32 +107,33 @@ def build_report(claims, golds, runs: dict, n_images: int) -> str:
     # ---- 4. Operational analysis ----
     A("## 4. Operational analysis\n")
     A(f"- Images processed (sample set): **{n_images}**.")
-    A("- Model calls per claim: 1 Stage-1 (Haiku) + 1 Stage-2 (Sonnet/Opus); "
-      "Tiered adds 1 extra Stage-2 (Opus) for each escalated claim.")
+    A("- Model calls per claim: 1 Stage-1 (Haiku) + **exactly 1** Stage-2 "
+      "(Sonnet *or* Opus). Routed picks the Stage-2 model up-front (no "
+      "Sonnet-then-Opus double-pay); the `Opus-routed` column counts rows the "
+      "router sent to Opus.")
     A("")
     A("### Per-configuration token usage, cost, and latency (on the sample set)\n")
-    A("| Config | Stage-2 calls | Escalations | Input tok | Output tok | Cache-read tok | Est. cost (USD) | Wall time |")
+    A("| Config | Stage-2 calls | Opus-routed | Input tok | Output tok | Cache-read tok | Est. cost (USD) | Wall time |")
     A("|---|---|---|---|---|---|---|---|")
     for c in runs:
         r = runs[c]
         t = r["cost"]["totals"]
-        n = len(r["results"])
-        s2_calls = n + r["escalated"]
+        s2_calls = sum(1 for x in r["results"] if not x.error)  # one Stage-2 call per non-error claim
         A(f"| {r['name']} | {s2_calls} | {r['escalated']} | {t['input']} | {t['output']} | "
           f"{t['cache_read']} | ${t['cost']:.4f} | {r['elapsed']:.1f}s |")
     A("")
-    A("Per-model breakdown (tiered, shipped config):\n")
+    A("Per-model breakdown (routed, shipped config):\n")
     A("| Model | Input | Output | Cache-read | Cache-write | Est. cost |")
     A("|---|---|---|---|---|---|")
-    for mrow in runs["tiered"]["cost"]["rows"]:
+    for mrow in runs["routed"]["cost"]["rows"]:
         A(f"| {mrow['model']} | {mrow['input']} | {mrow['output']} | {mrow['cache_read']} | "
           f"{mrow['cache_write']} | ${mrow['cost']:.4f} |")
     A("")
 
-    tiered_cost = runs["tiered"]["cost"]["totals"]["cost"]
-    est_test = tiered_cost * SAMPLE_TEST_RATIO
+    routed_cost = runs["routed"]["cost"]["totals"]["cost"]
+    est_test = routed_cost * SAMPLE_TEST_RATIO
     A("### Projected cost for the full test set\n")
-    A(f"- The sample set ({len(claims)} claims) costs ~**${tiered_cost:.4f}** under the tiered config.")
+    A(f"- The sample set ({len(claims)} claims) costs ~**${routed_cost:.4f}** under the routed config.")
     A(f"- `dataset/claims.csv` has 44 claims → projected ~**${est_test:.4f}** "
       f"(list-price estimate; OpenRouter may add a small routing fee).")
     A("- Pricing assumptions (list, per 1M tokens): Haiku 4.5 $1/$5, Sonnet 4.6 $3/$15, "
@@ -144,7 +146,7 @@ def build_report(claims, golds, runs: dict, n_images: int) -> str:
     A("- **Image cost control:** images are downscaled to a "
       f"{SETTINGS.image_max_edge}px long edge before encoding, capping image tokens.")
     A("- **On-disk response cache:** every call is keyed by (model, prompts, schema, image "
-      "hashes); re-runs and the tiered pass reuse cached responses, so iterating is free.")
+      "hashes); re-runs reuse cached responses, so iterating is free.")
     A(f"- **Concurrency / retries:** up to {SETTINGS.max_workers} concurrent claims; the SDK "
       f"retries 429/5xx with exponential backoff (max_retries={SETTINGS.max_retries}).")
     A("- **TPM/RPM:** at 44 test claims × ≤3 calls each (~130 requests, well under default "
@@ -154,13 +156,21 @@ def build_report(claims, golds, runs: dict, n_images: int) -> str:
       "cheaper model tier via env is the lever.\n")
 
     A("## 5. Final strategy\n")
-    A("Ship the **Tiered** config for `output.csv`: Stage 2 runs Sonnet 4.6 by default and "
-      "escalates to Opus 4.8 only on low-confidence rows or rows flagged "
-      "`possible_manipulation` / `non_original_image` / `claim_mismatch` / `wrong_object`. "
-      "This captures most of Opus's accuracy on the hard, adversarial rows while paying "
-      "Sonnet's price on the easy majority. All non-visual fields are computed by the "
-      "deterministic rule layer (validated against 100% of samples in "
-      "`code/tests/test_rules.py`).\n")
+    A("Ship **cost-first (Sonnet on every claim)** for `output.csv`. Every config above is "
+      "*single-route* — exactly one Stage-2 call per claim, no Sonnet-then-Opus double-pay "
+      "(the prior tiered config paid both on most rows). On this sample the single-route "
+      "frontier is Sonnet-all (cheapest, matches the routed accuracy at lower cost) vs "
+      "Opus-all (+accuracy, still ~25% under the old double-pay cost).\n")
+    A("The up-front router (`router.py`, shown as the **routed** column with its triggers "
+      "armed) is currently *dominated*: the only rows Opus uniquely fixes are image-hard, "
+      "not text-hard, so cheap Stage-1/history signals can't catch them — it pays more than "
+      "Sonnet-all for the same accuracy. It stays in the codebase, armed by a flag/env, "
+      "because the planned CLIP **image-vs-claim** signal (vectorstore, ADR-0004) is exactly "
+      "the cheap pre-Stage-2 trigger that would let routing reach Opus accuracy near "
+      "Sonnet cost. Switch the default to accuracy-first any time with "
+      "`python code/main.py --mode forced --model anthropic/claude-opus-4.8`.\n")
+    A("All non-visual fields are computed by the deterministic rule layer (validated against "
+      "100% of samples in `code/tests/test_rules.py`).\n")
     return "\n".join(L)
 
 
@@ -189,13 +199,20 @@ def main() -> None:
                             escalation_model=STAGE2_DEFAULT_MODEL, max_workers=args.workers)),
         ("opus_all", dict(mode="forced", default_model=STAGE2_ESCALATION_MODEL,
                           escalation_model=STAGE2_ESCALATION_MODEL, max_workers=args.workers)),
-        ("tiered", dict(mode="tiered", default_model=STAGE2_DEFAULT_MODEL,
+        ("routed", dict(mode="routed", default_model=STAGE2_DEFAULT_MODEL,
                         escalation_model=STAGE2_ESCALATION_MODEL, max_workers=args.workers)),
     ]
 
     runs: dict[str, dict] = {}
     for name, kw in configs:
         print(f"\n=== Running config: {name} ===", file=sys.stderr)
+        # The shipped default is cost-first (routing triggers off → Sonnet on
+        # every claim == sonnet_all). Arm the up-front router *only* for the
+        # "routed" config so the report still documents what routing would do.
+        armed = name == "routed"
+        SETTINGS.route_on_instruction_text = armed
+        SETTINGS.route_on_multi_part = armed
+        SETTINGS.route_on_history_risk = armed
         r = run_config(caller, name, claims, history, reqs_text, **kw)
         r["score"] = score(r["preds"], golds)
         runs[name] = r

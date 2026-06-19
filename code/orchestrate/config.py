@@ -7,7 +7,7 @@ as CLI flags.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 try:
@@ -50,6 +50,14 @@ CACHE_READ_MULT = 0.10
 CACHE_WRITE_MULT = 1.25
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var (1/true/yes/on); fall back to ``default``."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass
 class Settings:
     # Image preprocessing
@@ -68,15 +76,24 @@ class Settings:
     stage1_max_tokens: int = 1024
     stage2_max_tokens: int = 3000
 
-    # Escalation policy for the shipped tiered config
-    escalate_on_confidence: frozenset = field(
-        default_factory=lambda: frozenset({"low", "medium"})
-    )
-    escalate_on_flags: frozenset = field(
-        default_factory=lambda: frozenset(
-            {"possible_manipulation", "non_original_image", "claim_mismatch", "wrong_object"}
-        )
-    )
+    # Single-route policy (ADR-0003). A claim is routed to the (pricier)
+    # escalation model *up-front* — before any vision call — when a cheap
+    # pre-Stage-2 signal marks it hard/adversarial; otherwise it runs the default
+    # model. Either way each claim pays for exactly ONE Stage-2 call. This
+    # replaces the old confidence-escalation path, which always ran the default
+    # model and *then* re-ran the escalation model on top (two paid Stage-2 calls
+    # on every escalated row — see ADR-0003).
+    #
+    # SHIPPED DEFAULT = cost-first (all triggers off → Sonnet on every claim).
+    # The evaluation showed text/history routing is *dominated* on the sample —
+    # the only rows Opus uniquely fixes are image-hard, not text-hard, so these
+    # signals can't catch them (ADR-0003). The router stays armed and one flag
+    # away: flip a trigger on (or set the matching ORCH_ROUTE_* env) to escalate,
+    # and the planned CLIP image-vs-claim signal (vectorstore, ADR-0004) is the
+    # trigger that finally makes routing Pareto-beat both extremes.
+    route_on_instruction_text: bool = _env_bool("ORCH_ROUTE_ON_INSTRUCTION_TEXT", False)
+    route_on_multi_part: bool = _env_bool("ORCH_ROUTE_ON_MULTI_PART", False)
+    route_on_history_risk: bool = _env_bool("ORCH_ROUTE_ON_HISTORY_RISK", False)
 
     use_cache: bool = True
 

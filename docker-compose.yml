@@ -1,0 +1,62 @@
+name: orchestrate
+
+# One-command full stack for the evidence-review pipeline:
+#   docker compose run --rm app                         # -> output.csv (cost-first)
+#   docker compose run --rm app python code/evaluation/main.py
+#   docker compose run --rm app python code/dedup.py index
+#
+# The app reads OPENROUTER_API_KEY from your shell or the repo .env (Compose
+# auto-loads .env for interpolation). Redis backs the shared response cache and
+# Postgres/pgvector backs the image vector store; both are wired via env so the
+# same code runs locally with neither (filesystem cache, vector store skipped).
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports: ["6379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orchestrate
+      POSTGRES_PASSWORD: orchestrate
+      POSTGRES_DB: orchestrate
+    ports: ["5432:5432"]
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestrate -d orchestrate"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env or your shell}
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://orchestrate:orchestrate@postgres:5432/orchestrate
+      ORCH_EMBED_BACKEND: ${ORCH_EMBED_BACKEND:-phash}
+    # Bind-mount the project so output.csv lands on the host and the on-disk
+    # response cache is reused. Drop this volume for an immutable "deploy" build
+    # that uses only the code/data copied into the image.
+    volumes:
+      - .:/app
+
+volumes:
+  redis-data:
+  pg-data:

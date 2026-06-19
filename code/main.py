@@ -3,7 +3,7 @@
 write output.csv.
 
 Examples:
-    python code/main.py                          # tiered config -> ./output.csv
+    python code/main.py                          # routed config -> ./output.csv
     python code/main.py --limit 3                # smoke test on 3 rows
     python code/main.py --mode forced --model anthropic/claude-sonnet-4.6
     python code/main.py --output dataset/output.csv
@@ -35,7 +35,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--input", default=str(DATASET_DIR / "claims.csv"))
     ap.add_argument("--output", default=str(REPO_ROOT / "output.csv"))
-    ap.add_argument("--mode", choices=["tiered", "forced"], default="tiered")
+    ap.add_argument("--mode", choices=["routed", "forced"], default="routed")
     ap.add_argument("--model", default=STAGE2_DEFAULT_MODEL,
                     help="Stage-2 model when --mode forced")
     ap.add_argument("--limit", type=int, default=None, help="process only the first N claims")
@@ -77,7 +77,7 @@ def main() -> None:
 
     print(f"\nWrote {n} rows -> {out_path}", file=sys.stderr)
     print(f"claim_status: {dict(dist)}", file=sys.stderr)
-    print(f"escalated to Opus: {esc} | errors (fallback rows): {err}", file=sys.stderr)
+    print(f"routed to Opus: {esc} | errors (fallback rows): {err}", file=sys.stderr)
     print("\nToken usage / estimated cost:", file=sys.stderr)
     for row in summary["rows"]:
         print(
