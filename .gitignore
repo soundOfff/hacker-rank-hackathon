@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Response cache (regenerable; keyed by input hashes)
+.cache/
+
+# Eval artifacts that are regenerated on each run
+code/evaluation/preds_*.csv
